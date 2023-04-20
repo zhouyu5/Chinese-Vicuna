@@ -11,7 +11,7 @@ from utils import SteamGenerationMixin, printf
 assert (
     "LlamaTokenizer" in transformers._import_structure["models.llama"]
 ), "LLaMA is now in HuggingFace's main branch.\nPlease reinstall it: pip uninstall transformers && pip install git+https://github.com/huggingface/transformers.git"
-from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig
+from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig, LlamaTokenizer
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--model_path", type=str, default="EleutherAI/gpt-neo-2.7B")
@@ -22,11 +22,15 @@ parser.add_argument("--use_local", type=int, default=0)
 parser.add_argument("--load_8bit", type=bool, default=False)
 args = parser.parse_args()
 
-tokenizer = AutoTokenizer.from_pretrained(args.model_path)
 
 LOAD_8BIT = args.load_8bit
 BASE_MODEL = args.model_path
 LORA_WEIGHTS = args.lora_path
+
+if 'llama' in BASE_MODEL:
+    tokenizer = LlamaTokenizer.from_pretrained(args.model_path)
+else:
+    tokenizer = AutoTokenizer.from_pretrained(args.model_path)
 
 # fix the path for local checkpoint
 lora_bin_path = os.path.join(args.lora_path, "adapter_model.bin")
