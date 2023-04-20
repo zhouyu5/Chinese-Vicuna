@@ -13,6 +13,39 @@ assert (
 ), "LLaMA is now in HuggingFace's main branch.\nPlease reinstall it: pip uninstall transformers && pip install git+https://github.com/huggingface/transformers.git"
 from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig, LlamaTokenizer
 
+parser = argparse.ArgumentParser()
+parser.add_argument("--model_path", type=str, default="EleutherAI/gpt-neo-2.7B")
+parser.add_argument("--lora_path", type=str, default="nathan0/lora-gpt-neo-2.7B-alpaca")
+parser.add_argument("--use_typewriter", type=int, default=1)
+parser.add_argument("--share_link", type=int, default=1)
+parser.add_argument("--use_local", type=int, default=0)
+parser.add_argument("--load_8bit", type=bool, default=False)
+args = parser.parse_args()
+
+
+LOAD_8BIT = args.load_8bit
+BASE_MODEL = args.model_path
+LORA_WEIGHTS = args.lora_path
+
+if 'llama' in BASE_MODEL:
+    tokenizer = LlamaTokenizer.from_pretrained(args.model_path)
+else:
+    tokenizer = AutoTokenizer.from_pretrained(args.model_path)
+
+# fix the path for local checkpoint
+lora_bin_path = os.path.join(args.lora_path, "adapter_model.bin")
+print(lora_bin_path)
+if not os.path.exists(lora_bin_path) and args.use_local:
+    pytorch_bin_path = os.path.join(args.lora_path, "pytorch_model.bin")
+    print(pytorch_bin_path)
+    if os.path.exists(pytorch_bin_path):
+        os.rename(pytorch_bin_path, lora_bin_path)
+        warnings.warn(
+            "The file name of the lora checkpoint'pytorch_model.bin' is replaced with 'adapter_model.bin'"
+        )
+    else:
+        assert ('Checkpoint is not Found!')
+
 if torch.cuda.is_available():
     device = "cuda"
 else:
@@ -24,117 +57,128 @@ try:
 except:
     pass
 
+if device == "cuda":
+    model = AutoModelForCausalLM.from_pretrained(
+        BASE_MODEL,
+        load_in_8bit=LOAD_8BIT,
+        torch_dtype=torch.float16,
+        device_map={"": 0},
+    )
+    model = SteamGenerationMixin.from_pretrained(
+        model, LORA_WEIGHTS, torch_dtype=torch.float16, device_map={"": 0}
+    )
+elif device == "mps":
+    model = AutoModelForCausalLM.from_pretrained(
+        BASE_MODEL,
+        device_map={"": device},
+        torch_dtype=torch.float16,
+    )
+    model = SteamGenerationMixin.from_pretrained(
+        model,
+        LORA_WEIGHTS,
+        device_map={"": device},
+        torch_dtype=torch.float16,
+    )
+else:
+    model = AutoModelForCausalLM.from_pretrained(
+        BASE_MODEL, device_map={"": device}, low_cpu_mem_usage=True
+    )
+    model = SteamGenerationMixin.from_pretrained(
+        model,
+        LORA_WEIGHTS,
+        device_map={"": device},
+    )
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--model_path_list", type=str, default="EleutherAI/gpt-neo-2.7B")
-parser.add_argument("--lora_path_list", type=str, default="nathan0/lora-gpt-neo-2.7B-alpaca")
-parser.add_argument("--use_typewriter", type=int, default=1)
-parser.add_argument("--share_link", type=int, default=1)
-parser.add_argument("--use_local", type=int, default=0)
-parser.add_argument("--load_8bit", type=bool, default=False)
-args = parser.parse_args()
+def generate_prompt_and_tokenize0(data_point, maxlen):
+    # cutoff the history to avoid exceeding length limit
+    init_prompt = PROMPT_DICT['prompt']
+    init_ids = tokenizer(init_prompt)['input_ids']
+    seqlen = len(init_ids)
+    input_prompt = PROMPT_DICT['input'].format_map(data_point)
+    input_ids = tokenizer(input_prompt)['input_ids']
+    seqlen += len(input_ids)
+    if seqlen > maxlen:
+        raise Exception('>>> The input question is too long! Cosidering increase the Max Memory value or decrease the length of input! ')
+    history_prompt = ''
+    for history in data_point['history']:
+        history_prompt+= PROMPT_DICT['history'].format_map(history) 
+    # cutoff
+    history_ids = tokenizer(history_prompt)['input_ids'][-(maxlen - seqlen):]
+    input_ids = init_ids + history_ids + input_ids
+    return input_ids
 
-LOAD_8BIT = args.load_8bit
-model_path_list = args.model_path_list.split(',')
-lora_path_list = args.lora_path_list.split(',')
-model_name_list = [model_path.split('/')[-1] for model_path in model_path_list]
-model_name_dict = {
-    model_name: i
-    for i, model_name in enumerate(model_name_list)
-} 
+def postprocess0(text, render=True):
+    # clip user
+    text = text.split("### Assistant:")[1].strip()
+    text = text.replace('�','').replace("Belle", "Vicuna")
+    return text
 
+def generate_prompt_and_tokenize1(data_point, maxlen):
+    input_prompt = "\n".join(["User:" + i['input']+"\n"+"Assistant:" + i['output'] for i in data_point['history']]) + "\nUser:" + data_point['input'] + "\nAssistant:"
+    input_prompt = input_prompt[-maxlen:]
+    input_prompt = PROMPT_DICT['prompt'].format_map({'input':input_prompt})
+    input_ids = tokenizer(input_prompt)["input_ids"]
+    return input_ids
 
-def load_model_and_tokenizer(model_path, lora_path):
-    if 'llama' in model_path or 'vicuna' in model_path:
-        tokenizer = LlamaTokenizer.from_pretrained(model_path)
-    else:
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
-
-    if lora_path != '':
-
-        # fix the path for local checkpoint
-        lora_bin_path = os.path.join(lora_path, "adapter_model.bin")
-        print(lora_bin_path)
-        if not os.path.exists(lora_bin_path) and args.use_local:
-            pytorch_bin_path = os.path.join(lora_path, "pytorch_model.bin")
-            print(pytorch_bin_path)
-            if os.path.exists(pytorch_bin_path):
-                os.rename(pytorch_bin_path, lora_bin_path)
-                warnings.warn(
-                    "The file name of the lora checkpoint'pytorch_model.bin' is replaced with 'adapter_model.bin'"
-                )
+def postprocess1(text, render=True):
+    output = text.split("### Response:")[1].strip()
+    output = output.replace("Belle", "Vicuna")
+    printf('>>> output:', output)
+    if '###' in output:
+        output = output.split("###")[0]
+    if 'User' in output:
+        output = output.split("User")[0]
+    output = output.replace('�','') 
+    if render:
+        # fix gradio chatbot markdown code render bug
+        lines = output.split("\n")
+        for i, line in enumerate(lines):
+            if "```" in line:
+                if line != "```":
+                    lines[i] = f'<pre><code class="language-{lines[i][3:]}">'
+                else:
+                    lines[i] = '</code></pre>'
             else:
-                assert ('Checkpoint is not Found!')
+                if i > 0:
+                    lines[i] = "<br/>" + line.replace("<", "&lt;").replace(">", "&gt;").replace("__", '\_\_')
+        output =  "".join(lines)
+        # output = output.replace('<br/><pre>','\n<pre>') work for html; but not for gradio
+    return output
 
-        if device == "cuda":
-            model = AutoModelForCausalLM.from_pretrained(
-                model_path,
-                load_in_8bit=LOAD_8BIT,
-                torch_dtype=torch.float16,
-                device_map={"": 0},
-            )
-            model = SteamGenerationMixin.from_pretrained(
-                model, lora_path, torch_dtype=torch.float16, device_map={"": 0}
-            )
-        elif device == "mps":
-            model = AutoModelForCausalLM.from_pretrained(
-                model_path,
-                device_map={"": device},
-                torch_dtype=torch.float16,
-            )
-            model = SteamGenerationMixin.from_pretrained(
-                model,
-                lora_path,
-                device_map={"": device},
-                torch_dtype=torch.float16,
-            )
-        else:
-            model = AutoModelForCausalLM.from_pretrained(
-                model_path, device_map={"": device}, low_cpu_mem_usage=True
-            )
-            model = SteamGenerationMixin.from_pretrained(
-                model,
-                lora_path,
-                device_map={"": device},
-            )
-    else:
-        if device == "cuda":
-            model = AutoModelForCausalLM.from_pretrained(
-                model_path,
-                load_in_8bit=LOAD_8BIT,
-                torch_dtype=torch.float16,
-                device_map={"": 0},
-            )
-        elif device == "mps":
-            model = AutoModelForCausalLM.from_pretrained(
-                model_path,
-                device_map={"": device},
-                torch_dtype=torch.float16,
-            )
-        else:
-            model = AutoModelForCausalLM.from_pretrained(
-                model_path, device_map={"": device}, low_cpu_mem_usage=True
-            )
+PROMPT_DICT0 = {
+    'prompt': (
+        "The following is a conversation between an AI assistant called Assistant and a human user called User."
+        "Assistant is is intelligent, knowledgeable, wise and polite.\n\n"
+    ),
+    'history': (
+        "User:{input}\n\nAssistant:{output}\n\n"
+    ),
+    'input': (
+        "User:{input}\n\n### Assistant:"
+    ),
+    'preprocess': generate_prompt_and_tokenize0,
+    'postprocess': postprocess0,
+}
+PROMPT_DICT1 = {
+    'prompt': (
+        "The following is a conversation between an AI assistant called Assistant and a human user called User.\n\n"
+        "### Instruction:\n{input}\n\n### Response:"
+    ),
+    'preprocess': generate_prompt_and_tokenize1,
+    'postprocess': postprocess1,
+}
+PROMPT_DICT = None
 
-    if not LOAD_8BIT:
-        model.half()  # seems to fix bugs for some users.
+if not LOAD_8BIT:
+    model.half()  # seems to fix bugs for some users.
 
-    model.eval()
-    if torch.__version__ >= "2" and sys.platform != "win32":
-        model = torch.compile(model)
-    return model, tokenizer
-
-
-print(f'loading model: {model_name_list}')
-model_tokenizer_list = [
-    load_model_and_tokenizer(model_path, lora_path)
-    for model_path, lora_path in zip(model_path_list, lora_path_list)
-]
+model.eval()
+if torch.__version__ >= "2" and sys.platform != "win32":
+    model = torch.compile(model)
 
 def evaluate(
     inputs,
     history,
-    model_name,
     temperature=0.1,
     top_p=0.75,
     top_k=40,
@@ -147,90 +191,7 @@ def evaluate(
     prompt_type='Conversation',
     **kwargs,
 ):
-    def generate_prompt_and_tokenize0(data_point, maxlen):
-        # cutoff the history to avoid exceeding length limit
-        init_prompt = PROMPT_DICT['prompt']
-        init_ids = tokenizer(init_prompt)['input_ids']
-        seqlen = len(init_ids)
-        input_prompt = PROMPT_DICT['input'].format_map(data_point)
-        input_ids = tokenizer(input_prompt)['input_ids']
-        seqlen += len(input_ids)
-        if seqlen > maxlen:
-            raise Exception('>>> The input question is too long! Cosidering increase the Max Memory value or decrease the length of input! ')
-        history_prompt = ''
-        for history in data_point['history']:
-            history_prompt+= PROMPT_DICT['history'].format_map(history) 
-        # cutoff
-        history_ids = tokenizer(history_prompt)['input_ids'][-(maxlen - seqlen):]
-        input_ids = init_ids + history_ids + input_ids
-        return input_ids
-
-    def postprocess0(text, render=True):
-        # clip user
-        text = text.split("### Assistant:")[1].strip()
-        text = text.replace('�','').replace("Belle", "Vicuna")
-        return text
-
-    def generate_prompt_and_tokenize1(data_point, maxlen):
-        input_prompt = "\n".join(["User:" + i['input']+"\n"+"Assistant:" + i['output'] for i in data_point['history']]) + "\nUser:" + data_point['input'] + "\nAssistant:"
-        input_prompt = input_prompt[-maxlen:]
-        input_prompt = PROMPT_DICT['prompt'].format_map({'input':input_prompt})
-        input_ids = tokenizer(input_prompt)["input_ids"]
-        return input_ids
-
-    def postprocess1(text, render=True):
-        output = text.split("### Response:")[1].strip()
-        output = output.replace("Belle", "Vicuna")
-        printf('>>> output:', output)
-        if '###' in output:
-            output = output.split("###")[0]
-        if 'User' in output:
-            output = output.split("User")[0]
-        output = output.replace('�','') 
-        if render:
-            # fix gradio chatbot markdown code render bug
-            lines = output.split("\n")
-            for i, line in enumerate(lines):
-                if "```" in line:
-                    if line != "```":
-                        lines[i] = f'<pre><code class="language-{lines[i][3:]}">'
-                    else:
-                        lines[i] = '</code></pre>'
-                else:
-                    if i > 0:
-                        lines[i] = "<br/>" + line.replace("<", "&lt;").replace(">", "&gt;").replace("__", '\_\_')
-            output =  "".join(lines)
-            # output = output.replace('<br/><pre>','\n<pre>') work for html; but not for gradio
-        return output
-
-
-    print(f'You are choosing model: {model_name}')
-    model, tokenizer = model_tokenizer_list[model_name_dict[model_name]]
-
-    PROMPT_DICT0 = {
-        'prompt': (
-            "The following is a conversation between an AI assistant called Assistant and a human user called User."
-            "Assistant is is intelligent, knowledgeable, wise and polite.\n\n"
-        ),
-        'history': (
-            "User:{input}\n\nAssistant:{output}\n\n"
-        ),
-        'input': (
-            "User:{input}\n\n### Assistant:"
-        ),
-        'preprocess': generate_prompt_and_tokenize0,
-        'postprocess': postprocess0,
-    }
-    PROMPT_DICT1 = {
-        'prompt': (
-            "The following is a conversation between an AI assistant called Assistant and a human user called User.\n\n"
-            "### Instruction:\n{input}\n\n### Response:"
-        ),
-        'preprocess': generate_prompt_and_tokenize1,
-        'postprocess': postprocess1,
-    }
-
-    PROMPT_DICT = None
+    global PROMPT_DICT
     if prompt_type == 'Conversation':
         PROMPT_DICT = PROMPT_DICT0
     elif prompt_type == 'Instruction':
@@ -340,11 +301,11 @@ with gr.Blocks() as demo:
     fn = evaluate
     title = gr.Markdown(
         "<h1 style='text-align: center; margin-bottom: 1rem'>"
-        + f"LLM on Ray"
+        + f"Alpaca-LoRA on {BASE_MODEL.split('/')[-1]}"
         + "</h1>"
     )
     description = gr.Markdown(
-        f"For demo purpose only. This demo is intended to show the draft UI of LLM on Ray workflows in Mt.Whitney, demonstrating the functionality readiness of LLM on Ray workflow, with Multiple LLM supported."
+        f"It is finetuned on [{BASE_MODEL.split('/')[-1]}](https://huggingface.co/{BASE_MODEL}) to follow instructions from [Stanford Alpaca](https://github.com/tatsu-lab/stanford_alpaca) dataset using [LoRA](https://github.com/huggingface/peft) technology. "
     )
     history = gr.components.State()
     with gr.Row().style(equal_height=False):
@@ -354,7 +315,6 @@ with gr.Blocks() as demo:
                 input = gr.components.Textbox(
                     lines=2, label="Input", placeholder="Please input your question."
                 )
-                model_name = gr.inputs.Dropdown(model_name_list)
                 with gr.Row():
                     cancel_btn = gr.Button('Cancel')
                     submit_btn = gr.Button("Submit", variant="primary")
@@ -381,9 +341,9 @@ with gr.Blocks() as demo:
                     ['Conversation', 'Instruction'], value='Conversation', label="Prompt Type", info="select the specific prompt; use after clear history"
                 )
                 input_components = [
-                    input, history, model_name, temperature, topp, topk, beam_number, max_new_token, min_new_token, repeat_penal, max_memory, do_sample, type_of_prompt
+                    input, history, temperature, topp, topk, beam_number, max_new_token, min_new_token, repeat_penal, max_memory, do_sample, type_of_prompt
                 ]
-                input_components_except_states = [input, model_name, temperature, topp, topk, beam_number, max_new_token, min_new_token, repeat_penal, max_memory, do_sample, type_of_prompt]
+                input_components_except_states = [input, temperature, topp, topk, beam_number, max_new_token, min_new_token, repeat_penal, max_memory, do_sample, type_of_prompt]
             with gr.Row():
                 reset_btn = gr.Button("Reset Parameter")
                 clear_history = gr.Button("Clear History")
