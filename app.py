@@ -141,7 +141,7 @@ def evaluate(
     num_beams=1,
     max_new_tokens=512,
     min_new_tokens=1,
-    repetition_penalty=2.0,
+    repetition_penalty=1.0,
     max_memory=1024,
     do_sample=False,
     prompt_type='Conversation',
@@ -391,7 +391,7 @@ with gr.Blocks() as demo:
                     minimum=1, maximum=100, step=1, value=1, label="Min New Tokens"
                 )
                 repeat_penal = gr.components.Slider(
-                    minimum=0.1, maximum=10.0, step=0.1, value=2.0, label="Repetition Penalty"
+                    minimum=0.1, maximum=10.0, step=0.1, value=1.0, label="Repetition Penalty"
                 )
                 max_memory = gr.components.Slider(
                     minimum=0, maximum=2048, step=1, value=256, label="Max Memory"
