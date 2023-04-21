@@ -139,7 +139,7 @@ def evaluate(
     top_p=0.75,
     top_k=40,
     num_beams=1,
-    max_new_tokens=128,
+    max_new_tokens=512,
     min_new_tokens=1,
     repetition_penalty=2.0,
     max_memory=1024,
@@ -385,7 +385,7 @@ with gr.Blocks() as demo:
                 topk = gr.components.Slider(minimum=0, maximum=100, step=1, value=40, label="Top k")
                 beam_number = gr.components.Slider(minimum=1, maximum=10, step=1, value=1, label="Beams Number")
                 max_new_token = gr.components.Slider(
-                    minimum=1, maximum=2000, step=1, value=128, label="Max New Tokens"
+                    minimum=1, maximum=2000, step=1, value=512, label="Max New Tokens"
                 )
                 min_new_token = gr.components.Slider(
                     minimum=1, maximum=100, step=1, value=1, label="Min New Tokens"
