@@ -1,6 +1,5 @@
 import sys
 import torch
-from peft import PeftModel, PeftModelForCausalLM, LoraConfig
 import transformers
 import json
 import gradio as gr
@@ -27,14 +26,14 @@ except:
 
 parser = argparse.ArgumentParser()
 parser.add_argument("--model_path_list", type=str, default="EleutherAI/gpt-neo-2.7B")
-parser.add_argument("--lora_path_list", type=str, default="nathan0/lora-gpt-neo-2.7B-alpaca")
+parser.add_argument("--lora_path_list", type=str, default="")
 parser.add_argument("--use_typewriter", type=int, default=1)
 parser.add_argument("--share_link", type=int, default=1)
 parser.add_argument("--use_local", type=int, default=0)
-parser.add_argument("--load_8bit", type=bool, default=False)
+parser.add_argument("--load_8bit_list", type=str, default='0')
 args = parser.parse_args()
 
-LOAD_8BIT = args.load_8bit
+load_8bit_list = [bool(int(item)) for item in args.load_8bit_list.split(',')]
 model_path_list = args.model_path_list.split(',')
 lora_path_list = args.lora_path_list.split(',')
 model_name_list = [model_path.split('/')[-1] for model_path in model_path_list]
@@ -44,13 +43,13 @@ model_name_dict = {
 } 
 
 
-def load_model_and_tokenizer(model_path, lora_path):
-    if 'llama' in model_path or 'vicuna' in model_path:
+def load_model_and_tokenizer(model_path, lora_path, LOAD_8BIT):
+    if 'llama' in model_path:
         tokenizer = LlamaTokenizer.from_pretrained(model_path)
     else:
-        tokenizer = AutoTokenizer.from_pretrained(model_path)
+        tokenizer = AutoTokenizer.from_pretrained(model_path, use_fast=False)
 
-    if lora_path != '':
+    if lora_path:
 
         # fix the path for local checkpoint
         lora_bin_path = os.path.join(lora_path, "adapter_model.bin")
@@ -127,9 +126,10 @@ def load_model_and_tokenizer(model_path, lora_path):
 
 print(f'loading model: {model_name_list}')
 model_tokenizer_list = [
-    load_model_and_tokenizer(model_path, lora_path)
-    for model_path, lora_path in zip(model_path_list, lora_path_list)
+    load_model_and_tokenizer(model_path, lora_path, LOAD_8BIT)
+    for model_path, lora_path, LOAD_8BIT in zip(model_path_list, lora_path_list, load_8bit_list)
 ]
+
 
 def evaluate(
     inputs,
@@ -202,6 +202,17 @@ def evaluate(
             output =  "".join(lines)
             # output = output.replace('<br/><pre>','\n<pre>') work for html; but not for gradio
         return output
+    
+    def generate_prompt_and_tokenize2(data_point, maxlen):
+        input_prompt = data_point['input']
+        input_prompt = input_prompt[-maxlen:]
+        input_prompt = PROMPT_DICT['prompt'].format_map({'input':input_prompt})
+        input_ids = tokenizer(input_prompt)["input_ids"]
+        return input_ids
+    
+    def postprocess2(text):
+        output = text.split("### Response:")[1].strip().split('###')[0]
+        return output
 
 
     print(f'You are choosing model: {model_name}')
@@ -229,9 +240,19 @@ def evaluate(
         'preprocess': generate_prompt_and_tokenize1,
         'postprocess': postprocess1,
     }
+    PROMPT_DICT2 = {
+        'prompt': (
+            "Below is an instruction that describes a task. Write a response that appropriately completes the request.\n\n"
+            "### Instruction:\n{input}\n\n### Response:"
+        ),
+        'preprocess': generate_prompt_and_tokenize2,
+        'postprocess': postprocess2,
+    }
 
     PROMPT_DICT = None
-    if prompt_type == 'Conversation':
+    if 'vicuna' in model_name:
+        PROMPT_DICT = PROMPT_DICT2
+    elif prompt_type == 'Conversation':
         PROMPT_DICT = PROMPT_DICT0
     elif prompt_type == 'Instruction':
         PROMPT_DICT = PROMPT_DICT1
@@ -268,7 +289,7 @@ def evaluate(
     with torch.no_grad():
         # 流式输出 / 打字机效果
         # streamly output / typewriter style
-        if args.use_typewriter:
+        if args.use_typewriter and 'vicuna' not in model_name:
             try:
                 for generation_output in model.stream_generate(
                     input_ids=input_ids,
@@ -354,7 +375,7 @@ with gr.Blocks() as demo:
                 input = gr.components.Textbox(
                     lines=2, label="Input", placeholder="Please input your question."
                 )
-                model_name = gr.inputs.Dropdown(model_name_list)
+                model_name = gr.Dropdown(choices=model_name_list, label='model list', value=model_name_list[0])
                 with gr.Row():
                     cancel_btn = gr.Button('Cancel')
                     submit_btn = gr.Button("Submit", variant="primary")
