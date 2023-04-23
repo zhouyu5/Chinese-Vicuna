@@ -141,7 +141,6 @@ def evaluate(
     num_beams=1,
     max_new_tokens=512,
     min_new_tokens=1,
-    repetition_penalty=1.0,
     max_memory=1024,
     do_sample=False,
     prompt_type='Conversation',
@@ -296,7 +295,6 @@ def evaluate(
                     generation_config=generation_config,
                     return_dict_in_generate=True,
                     output_scores=False,
-                    repetition_penalty=float(repetition_penalty),
                 ):
                     outputs = tokenizer.batch_decode(generation_output)
                     show_text = "\n--------------------------------------------\n".join(
@@ -333,7 +331,6 @@ def evaluate(
                     return_dict_in_generate=True,
                     output_scores=True,
                     max_new_tokens=max_new_tokens,
-                    repetition_penalty=float(repetition_penalty),
                 )
                 s = generation_output.sequences[0]
                 output = tokenizer.decode(s)
@@ -361,11 +358,12 @@ with gr.Blocks() as demo:
     fn = evaluate
     title = gr.Markdown(
         "<h1 style='text-align: center; margin-bottom: 1rem'>"
-        + f"LLM on Ray"
+        + f"E2E AIOK optimized LLM"
         + "</h1>"
     )
     description = gr.Markdown(
-        f"For demo purpose only. This demo is intended to show the draft UI of LLM on Ray workflows in Mt.Whitney, demonstrating the functionality readiness of LLM on Ray workflow, with Multiple LLM supported."
+        f"For demo purpose only. This demo is intended to show the draft UI of LLM on Ray workflows in Mt.Whitney, demonstrating the functionality readiness of LLM on Ray workflow, with Multiple LLM supported. "
+        "Currently, we support GPT-2/GPT-J/LLaMA series models. We are planning to support more GPT-like models."
     )
     history = gr.components.State()
     with gr.Row().style(equal_height=False):
@@ -385,13 +383,10 @@ with gr.Blocks() as demo:
                 topk = gr.components.Slider(minimum=0, maximum=100, step=1, value=40, label="Top k")
                 beam_number = gr.components.Slider(minimum=1, maximum=10, step=1, value=1, label="Beams Number")
                 max_new_token = gr.components.Slider(
-                    minimum=1, maximum=2000, step=1, value=512, label="Max New Tokens"
+                    minimum=1, maximum=2000, step=1, value=128, label="Max New Tokens"
                 )
                 min_new_token = gr.components.Slider(
                     minimum=1, maximum=100, step=1, value=1, label="Min New Tokens"
-                )
-                repeat_penal = gr.components.Slider(
-                    minimum=0.1, maximum=10.0, step=0.1, value=1.0, label="Repetition Penalty"
                 )
                 max_memory = gr.components.Slider(
                     minimum=0, maximum=2048, step=1, value=256, label="Max Memory"
@@ -399,12 +394,12 @@ with gr.Blocks() as demo:
                 do_sample = gr.components.Checkbox(label="Use sample")
                 # must be str, not number !
                 type_of_prompt = gr.components.Dropdown(
-                    ['Conversation', 'Instruction'], value='Conversation', label="Prompt Type", info="select the specific prompt; use after clear history"
+                    ['Conversation', 'Instruction'], value='Instruction', label="Prompt Type", info="select the specific prompt; use after clear history"
                 )
                 input_components = [
-                    input, history, model_name, temperature, topp, topk, beam_number, max_new_token, min_new_token, repeat_penal, max_memory, do_sample, type_of_prompt
+                    input, history, model_name, temperature, topp, topk, beam_number, max_new_token, min_new_token, max_memory, do_sample, type_of_prompt
                 ]
-                input_components_except_states = [input, model_name, temperature, topp, topk, beam_number, max_new_token, min_new_token, repeat_penal, max_memory, do_sample, type_of_prompt]
+                input_components_except_states = [input, model_name, temperature, topp, topk, beam_number, max_new_token, min_new_token, max_memory, do_sample, type_of_prompt]
             with gr.Row():
                 reset_btn = gr.Button("Reset Parameter")
                 clear_history = gr.Button("Clear History")
