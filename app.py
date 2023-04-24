@@ -10,7 +10,8 @@ from utils import SteamGenerationMixin, printf
 assert (
     "LlamaTokenizer" in transformers._import_structure["models.llama"]
 ), "LLaMA is now in HuggingFace's main branch.\nPlease reinstall it: pip uninstall transformers && pip install git+https://github.com/huggingface/transformers.git"
-from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig, LlamaTokenizer
+from transformers import AutoTokenizer, AutoModelForCausalLM, GenerationConfig, LlamaTokenizer, TextIteratorStreamer
+from threading import Thread
 
 if torch.cuda.is_available():
     device = "cuda"
@@ -210,7 +211,8 @@ def evaluate(
         return input_ids
     
     def postprocess2(text):
-        output = text.split("### Response:")[1].strip().split('###')[0]
+        # output = text.split("### Response:")[1].strip().split('###')[0]
+        output = text.strip().split('###')[0]
         return output
 
 
@@ -284,45 +286,48 @@ def evaluate(
     
     return_text = [(item['input'], item['output']) for item in history]
     out_memory =False
-    outputs = None
     with torch.no_grad():
         # 流式输出 / 打字机效果
         # streamly output / typewriter style
         if args.use_typewriter:
             try:
-                for generation_output in model.stream_generate(
+                streamer = TextIteratorStreamer(tokenizer, timeout=10., skip_prompt=True)
+                generation_kwargs = dict(
                     input_ids=input_ids,
                     generation_config=generation_config,
                     return_dict_in_generate=True,
-                    output_scores=False,
-                ):
-                    outputs = tokenizer.batch_decode(generation_output)
-                    show_text = "\n--------------------------------------------\n".join(
-                        [PROMPT_DICT['postprocess'](output)+" ▌" for output in outputs]
-                    )
+                    output_scores=True,
+                    streamer=streamer,
+                )
+                thread = Thread(target=model.generate, kwargs=generation_kwargs)
+                thread.start()
+                generation_output = ""
+                for new_text in streamer:
+                    generation_output += new_text
+                    show_text = PROMPT_DICT['postprocess'](generation_output)+" ▌"
                     printf(show_text)
                     yield return_text +[(inputs, show_text)], history
+
             except torch.cuda.OutOfMemoryError:
                 import gc
                 gc.collect()
                 torch.cuda.empty_cache()
                 out_memory=True
             # finally only one
-            show_text = PROMPT_DICT['postprocess'](outputs[0] if outputs is not None else '### Response:')
             return_len = len(show_text)
+            if return_len > 1:
+                show_text = show_text[:-1]
             if out_memory==True:
                 out_memory=False
                 show_text+= '<p style="color:#FF0000"> [GPU Out Of Memory] </p> '
-            if return_len > 0:
-                output = PROMPT_DICT['postprocess'](outputs[0], render=False)
-                history.append({
-                    'input': inputs,
-                    'output': output,
-                })
+            output = show_text
+            history.append({
+                'input': inputs,
+                'output': output,
+            })
             printf(show_text)
             return_text += [(inputs, show_text)]
             yield return_text, history
-        # common 
         else:
             try:
                 generation_output = model.generate(

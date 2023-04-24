@@ -12,7 +12,7 @@ set -x
 BASE_MODEL="/home/vmagent/app/data/vicuna-7b,/home/vmagent/app/data/alpaca-lora-7b"
 python app.py --model_path_list $BASE_MODEL \
     --load_8bit "0,0" \
-    --use_typewriter 0
+    --use_typewriter 1
 
 # BASE_MODEL="/home/vmagent/app/data/vicuna-7b"
 # python app.py --model_path_list $BASE_MODEL \
