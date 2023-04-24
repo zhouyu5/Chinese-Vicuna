@@ -313,7 +313,7 @@ def evaluate(
                 gc.collect()
                 torch.cuda.empty_cache()
                 out_memory=True
-            # finally only one
+            streamer.end()
             return_len = len(show_text)
             if return_len > 1:
                 show_text = show_text[:-1]
