@@ -35,7 +35,7 @@ args = parser.parse_args()
 
 load_8bit_list = [bool(int(item)) for item in args.load_8bit_list.split(',')]
 model_path_list = args.model_path_list.split(',')
-lora_path_list = args.lora_path_list.split(',')
+lora_path_list = args.lora_path_list.split(',') if ',' in args.lora_path_list else ['']*len(model_path_list)
 model_name_list = [model_path.split('/')[-1] for model_path in model_path_list]
 model_name_dict = {
     model_name: i
@@ -251,6 +251,8 @@ def evaluate(
     PROMPT_DICT = None
     if 'vicuna' in model_name:
         PROMPT_DICT = PROMPT_DICT2
+    elif 'lora' in model_name:
+        PROMPT_DICT = PROMPT_DICT2
     elif prompt_type == 'Conversation':
         PROMPT_DICT = PROMPT_DICT0
     elif prompt_type == 'Instruction':
@@ -273,8 +275,6 @@ def evaluate(
         top_p=top_p,
         top_k=top_k,
         num_beams=num_beams,
-        bos_token_id=1,
-        eos_token_id=2,
         pad_token_id=0,
         max_new_tokens=max_new_tokens, # max_length=max_new_tokens+input_sequence
         min_new_tokens=min_new_tokens, # min_length=min_new_tokens+input_sequence
@@ -288,7 +288,7 @@ def evaluate(
     with torch.no_grad():
         # 流式输出 / 打字机效果
         # streamly output / typewriter style
-        if args.use_typewriter and 'vicuna' not in model_name:
+        if args.use_typewriter:
             try:
                 for generation_output in model.stream_generate(
                     input_ids=input_ids,
@@ -330,7 +330,6 @@ def evaluate(
                     generation_config=generation_config,
                     return_dict_in_generate=True,
                     output_scores=True,
-                    max_new_tokens=max_new_tokens,
                 )
                 s = generation_output.sequences[0]
                 output = tokenizer.decode(s)
@@ -378,7 +377,7 @@ with gr.Blocks() as demo:
                     cancel_btn = gr.Button('Cancel')
                     submit_btn = gr.Button("Submit", variant="primary")
                     stop_btn = gr.Button("Stop", variant="stop", visible=False)
-                temperature = gr.components.Slider(minimum=0, maximum=1, value=0.1, label="Temperature")
+                temperature = gr.components.Slider(minimum=0, maximum=1, value=0.3, label="Temperature")
                 topp = gr.components.Slider(minimum=0, maximum=1, value=0.75, label="Top p")
                 topk = gr.components.Slider(minimum=0, maximum=100, step=1, value=40, label="Top k")
                 beam_number = gr.components.Slider(minimum=1, maximum=10, step=1, value=1, label="Beams Number")
@@ -391,7 +390,7 @@ with gr.Blocks() as demo:
                 max_memory = gr.components.Slider(
                     minimum=0, maximum=2048, step=1, value=256, label="Max Memory"
                 )
-                do_sample = gr.components.Checkbox(label="Use sample")
+                do_sample = gr.components.Checkbox(label="do sample", value=True)
                 # must be str, not number !
                 type_of_prompt = gr.components.Dropdown(
                     ['Conversation', 'Instruction'], value='Instruction', label="Prompt Type", info="select the specific prompt; use after clear history"
